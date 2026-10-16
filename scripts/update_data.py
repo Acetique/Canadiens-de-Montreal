@@ -73,3 +73,17 @@ with ThreadPoolExecutor(max_workers=5) as pool:
 (DEST/'metadata.json').write_text(json.dumps({'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'season':season,'players':len(players),'failed':len(failed)},ensure_ascii=False),encoding='utf-8')
 print(f'Terminé : {len(paths)-len(failed)}/{len(paths)} fiches/détails chargés; {len(players)} joueurs.')
 
+# Pointages de toute la LNH : hier, aujourd'hui et demain (date de Montréal).
+from zoneinfo import ZoneInfo
+local_day = datetime.datetime.now(ZoneInfo('America/Toronto')).date()
+score_errors=[]
+for offset in (-1,0,1):
+    day=(local_day+datetime.timedelta(days=offset)).isoformat()
+    try:
+        score=download('/score/'+day)
+        save('/league/score/'+day,score)
+        print('OK pointages LNH',day,flush=True)
+    except Exception as exc:
+        score_errors.append(day)
+        print('AVERTISSEMENT pointages LNH',day,exc,flush=True)
+save('/league/dates',{'dates':[(local_day+datetime.timedelta(days=n)).isoformat() for n in (-1,0,1)],'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'errors':score_errors})
