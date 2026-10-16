@@ -70,7 +70,7 @@ with ThreadPoolExecutor(max_workers=5) as pool:
             failed.append(str(exc))
             print('AVERTISSEMENT',exc,flush=True)
 
-(DEST/'metadata.json').write_text(json.dumps({'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'season':season,'players':len(players),'failed':len(failed)},ensure_ascii=False),encoding='utf-8')
+# Horodatage de fin enregistré après toutes les collectes.
 print(f'Terminé : {len(paths)-len(failed)}/{len(paths)} fiches/détails chargés; {len(players)} joueurs.')
 
 # Archive complète des dates de la saison et rafraîchissement des matchs récents.
@@ -173,6 +173,9 @@ print('Collecte terminée',metadata,flush=True)
 # V9 : effectifs et statistiques des 32 équipes.
 team_codes=sorted({(x.get('teamAbbrev') or {}).get('default','') for x in results.get('standings',{}).get('standings',[])})
 team_codes=[c for c in team_codes if c]
+# Conserver les 32 clubs même si le classement officiel est temporairement vide.
+known_teams=['ANA','BOS','BUF','CAR','CBJ','CGY','CHI','COL','DAL','DET','EDM','FLA','LAK','MIN','MTL','NJD','NSH','NYI','NYR','OTT','PHI','PIT','SEA','SJS','STL','TBL','TOR','UTA','VAN','VGK','WPG','WSH']
+team_codes=sorted(set(team_codes)|set(known_teams))
 if not team_codes:
     team_codes=['ANA','BOS','BUF','CAR','CBJ','CGY','CHI','COL','DAL','DET','EDM','FLA','LAK','MIN','MTL','NJD','NSH','NYI','NYR','OTT','PHI','PIT','SEA','SJS','STL','TBL','TOR','UTA','VAN','VGK','WPG','WSH']
 all_players={}
@@ -263,3 +266,14 @@ for p in all_players.values():
 if all_players:
     save('/league/skaters',{'season':season,'players':list(all_players.values()),'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat()})
 print('Fiches avancées :',min(len(landing_missing),120),'demandées.',flush=True)
+
+# V10 : classement complet depuis les fiches statistiques des 32 clubs.
+# Contrairement à /skater-stats-leaders, cette source contient MJ, B, A et PTS.
+if all_players:
+    ranked=sorted(all_players.values(),key=lambda x:(int(x.get('points') or 0),int(x.get('goals') or 0),int(x.get('assists') or 0)),reverse=True)
+    save('/league/top-scorers',{'season':season,'players':[{'playerId':p.get('playerId'),'name':p.get('name'),'teamAbbrev':p.get('teamAbbrev'),'gamesPlayed':p.get('gamesPlayed'),'goals':p.get('goals'),'assists':p.get('assists'),'points':p.get('points')} for p in ranked[:100]],'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+meta_file=DEST/'metadata.json'
+meta=json.loads(meta_file.read_text(encoding='utf-8')) if meta_file.exists() else {}
+meta.update({'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'season':season,'league_players':len(all_players),'league_teams':len(set(p.get('teamAbbrev') for p in all_players.values())),'version':'10'})
+save('/metadata',meta)
+print('V10 :',len(all_players),'joueurs LNH,',meta['league_teams'],'équipes, classement complet généré.',flush=True)
