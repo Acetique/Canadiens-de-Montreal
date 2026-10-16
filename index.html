@@ -202,4 +202,47 @@ async function forceGithubUpdate(){
  }catch(e){btn.disabled=false;btn.textContent='⚡ Forcer collecte LNH';$('status').textContent='Échec du déclenchement : '+e.message;}
 }
 $('forceUpdate').onclick=forceGithubUpdate;
-</script></body></html>
+</script>
+<script>
+/* CH LIVE : gestion indépendante du bouton, même si une autre section JS échoue. */
+(function () {
+  const endpoint = 'https://h-live-trigger.vercel.app/api/trigger';
+  const button = document.getElementById('forceUpdate');
+  if (!button) return;
+  button.addEventListener('click', async function (event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    let secret = sessionStorage.getItem('ch_live_admin_code');
+    if (!secret) {
+      secret = window.prompt('Entre ton code administrateur CH LIVE (ADMIN_CODE dans Vercel) :');
+      if (!secret) return;
+    }
+    const status = document.getElementById('status');
+    const show = message => { if (status) status.textContent = message; else window.alert(message); };
+    button.disabled = true;
+    button.textContent = '⏳ Demande en cours…';
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CH-LIVE-ADMIN': secret },
+        body: JSON.stringify({})
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) sessionStorage.removeItem('ch_live_admin_code');
+        throw new Error(result.error || 'Erreur HTTP ' + response.status);
+      }
+      sessionStorage.setItem('ch_live_admin_code', secret);
+      show('✓ Demande envoyée à GitHub Actions. La collecte peut prendre plusieurs minutes.');
+      window.alert('✓ Demande de collecte envoyée. Vérifie GitHub Actions pour suivre son exécution.');
+    } catch (error) {
+      show('Échec : ' + error.message);
+      window.alert('Impossible de déclencher GitHub Actions : ' + error.message + '\nSi tu vois Failed to fetch, vérifie les autorisations CORS de la fonction Vercel.');
+    } finally {
+      button.disabled = false;
+      button.textContent = '⚡ Forcer collecte LNH';
+    }
+  }, true);
+})();
+</script>
+</body></html>
