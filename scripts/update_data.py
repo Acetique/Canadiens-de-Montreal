@@ -73,17 +73,36 @@ with ThreadPoolExecutor(max_workers=5) as pool:
 (DEST/'metadata.json').write_text(json.dumps({'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'season':season,'players':len(players),'failed':len(failed)},ensure_ascii=False),encoding='utf-8')
 print(f'Terminé : {len(paths)-len(failed)}/{len(paths)} fiches/détails chargés; {len(players)} joueurs.')
 
-# Pointages de toute la LNH : hier, aujourd'hui et demain (date de Montréal).
+# Archive complète des dates de la saison et rafraîchissement des matchs récents.
 from zoneinfo import ZoneInfo
-local_day = datetime.datetime.now(ZoneInfo('America/Toronto')).date()
+local_day=datetime.datetime.now(ZoneInfo('America/Toronto')).date()
+start_year=int(str(season)[:4]);start=datetime.date(start_year,9,1);end=datetime.date(start_year+1,7,1)
+# Toutes les dates : les fichiers existants sont conservés. Les journées à venir
+# et les 3 derniers jours sont renouvelés à chaque exécution.
+days=[start+datetime.timedelta(days=i) for i in range((end-start).days+1)]
+paths_to_fetch=[]
+for day in days:
+    file=DEST/'league'/'score'/f'{day.isoformat()}.json'
+    if not file.exists() or abs((day-local_day).days)<=3:
+        paths_to_fetch.append(day)
+
+def fetch_score(day):
+    value=download('/score/'+day.isoformat())
+    value['cached_at']=datetime.datetime.now(datetime.timezone.utc).isoformat()
+    save('/league/score/'+day.isoformat(),value)
+    return day
+
 score_errors=[]
-for offset in (-1,0,1):
-    day=(local_day+datetime.timedelta(days=offset)).isoformat()
-    try:
-        score=download('/score/'+day)
-        save('/league/score/'+day,score)
-        print('OK pointages LNH',day,flush=True)
-    except Exception as exc:
-        score_errors.append(day)
-        print('AVERTISSEMENT pointages LNH',day,exc,flush=True)
-save('/league/dates',{'dates':[(local_day+datetime.timedelta(days=n)).isoformat() for n in (-1,0,1)],'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'errors':score_errors})
+with ThreadPoolExecutor(max_workers=6) as pool:
+    futures={pool.submit(fetch_score,d):d for d in paths_to_fetch}
+    for future in as_completed(futures):
+        try:future.result()
+        except Exception as exc:
+            day=futures[future]
+            score_errors.append(day.isoformat())
+            print('AVERTISSEMENT pointages LNH',day,exc,flush=True)
+save('/league/dates',{'start':start.isoformat(),'end':end.isoformat(),
+    'dates':[d.isoformat() for d in days],
+    'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'errors':score_errors})
+print(f'Pointages : {len(paths_to_fetch)-len(score_errors)}/{len(paths_to_fetch)} journées téléchargées.')
