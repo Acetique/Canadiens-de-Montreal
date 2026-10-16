@@ -106,10 +106,13 @@ function renderAllStandings(){
  }).join('')||'<tr><td colspan="9">Classement indisponible. Exécuter GitHub Actions.</td></tr>';
 }
 async function loadLeaders(){
- try{const d=await get('/skater-stats-leaders/current');let a=d.points||d.skaterStatsLeaders?.points||[];if(!Array.isArray(a))a=[];
- $('leaderrows').innerHTML=a.slice(0,30).map((p,i)=>{const id=p.id||p.playerId;const nm=p.firstName&&p.lastName?`${name(p.firstName)} ${name(p.lastName)}`:name(p.name)||name(p.playerName);const team=name(p.teamAbbrev)||name(p.teamName);return `<tr><td>${i+1}</td><td>${safe(nm)}</td><td>${safe(team)}</td><td>${p.gamesPlayed??'—'}</td><td>${p.goals??'—'}</td><td>${p.assists??'—'}</td><td><b>${p.value??p.points??'—'}</b></td></tr>`}).join('')||'<tr><td colspan="7">Aucun classement des pointeurs disponible.</td></tr>';
- $('leadersnote').textContent='Données issues de la dernière collecte GitHub Actions. Les statistiques manquantes sont indiquées par —.';
- }catch(e){$('leaderrows').innerHTML='<tr><td colspan="7">Données non générées. Lancez le workflow GitHub Actions avec le nouveau script Python.</td></tr>';$('leadersnote').textContent=e.message;}
+ try{
+  // V10 : MJ/B/A/PTS proviennent des statistiques complètes des clubs.
+  let a=[];
+  try{const d=await get('/league/top-scorers');a=d.players||[];}catch(e){const d=await get('/league/skaters');a=(d.players||[]).slice().sort((x,y)=>(y.points||0)-(x.points||0));}
+  $('leaderrows').innerHTML=a.slice(0,50).map((p,i)=>`<tr><td>${i+1}</td><td>${safe(p.name||`${name(p.firstName)} ${name(p.lastName)}`)}</td><td>${safe(p.teamAbbrev||'—')}</td><td>${p.gamesPlayed??'—'}</td><td>${p.goals??'—'}</td><td>${p.assists??'—'}</td><td><b>${p.points??'—'}</b></td></tr>`).join('')||'<tr><td colspan="7">Aucun joueur disponible. Vérifier la collecte des 32 équipes.</td></tr>';
+  $('leadersnote').textContent='Classement calculé à partir des statistiques complètes des 32 équipes (MJ, B, A, PTS).';
+ }catch(e){$('leaderrows').innerHTML='<tr><td colspan="7">Statistiques des équipes non générées. Exécutez GitHub Actions avec update_data.py V10.</td></tr>';$('leadersnote').textContent=e.message;}
 }
 function populateCompare(){
  const players=[...skaters].sort((a,b)=>a.name.localeCompare(b.name,'fr'));
@@ -157,15 +160,16 @@ async function loadAllPlayers(){
  $('leagueCompareA').innerHTML=opts;$('leagueCompareB').innerHTML=opts;
  if(allSkaters.length>1)$('leagueCompareB').selectedIndex=1;
  renderAllPlayers();
- }catch(e){$('leaguePlayerRows').innerHTML=`<tr><td colspan="7">Collecte LNH non disponible : ${safe(e.message)}</td></tr>`;}
+ if(!allSkaters.length){$('leagueCompareOutput').textContent='Aucune fiche LNH récupérée. Vérifiez les erreurs de collecte des clubs dans GitHub Actions.';}
+ }catch(e){$('leagueCompareOutput').textContent='Comparateur indisponible : données des 32 équipes absentes. Exécutez le workflow avec le script V10.';$('leaguePlayerRows').innerHTML=`<tr><td colspan="7">Collecte LNH non disponible : ${safe(e.message)}</td></tr>`;}
 }
 function renderAllPlayers(){const q=$('leagueSearch').value.toLowerCase(),team=$('leagueTeam').value;
  const a=allSkaters.filter(p=>(!team||p.teamAbbrev===team)&&(`${p.name} ${p.teamAbbrev}`).toLowerCase().includes(q)).sort((a,b)=>(b.points||0)-(a.points||0));
  $('leaguePlayerRows').innerHTML=a.map(p=>`<tr><td>${safe(p.name)}</td><td>${safe(p.teamAbbrev)}</td><td>${p.gamesPlayed??'—'}</td><td>${p.goals??'—'}</td><td>${p.assists??'—'}</td><td>${p.points??'—'}</td><td>${safe(getToi(p))}</td></tr>`).join('')||'<tr><td colspan="7">Aucun joueur.</td></tr>';
 }
 async function compareLeaguePlayers(){const ids=[$('leagueCompareA').value,$('leagueCompareB').value].map(Number),n=Number($('leagueComparePeriod').value),out=$('leagueCompareOutput');if(ids[0]===ids[1]){out.textContent='Choisissez deux joueurs différents.';return;}out.textContent='Chargement des comparaisons…';
- try{const results=await Promise.all(ids.map(async id=>{const p=allSkaters.find(x=>x.playerId===id);if(!p)throw Error('Joueur introuvable');const season=Number((await get('/metadata')).season);const log=await get(`/player/${id}/game-log/${season}/2`);const recent=(log.gameLog||[]).filter(x=>x.gameDate).sort((a,b)=>b.gameDate.localeCompare(a.gameDate)).slice(0,n);const sum=k=>recent.reduce((s,x)=>s+(Number(x[k])||0),0);return {p,recent,stats:[p.gamesPlayed,p.goals,p.assists,p.points,getToi(p),sum('goals'),sum('assists'),sum('points'),sum('shots')]};}));const labels=['MJ saison','Buts saison','Passes saison','Points saison','Temps de glace / match',`Buts (${n} derniers)`,`Passes (${n} derniers)`,`Points (${n} derniers)`,`Tirs (${n} derniers)`];out.innerHTML=`<div class="tablewrap"><table><thead><tr><th>Statistique</th><th>${safe(results[0].p.name)} (${safe(results[0].p.teamAbbrev)})</th><th>${safe(results[1].p.name)} (${safe(results[1].p.teamAbbrev)})</th></tr></thead><tbody>${labels.map((x,i)=>`<tr><td>${safe(x)}</td><td>${safe(results[0].stats[i]??'—')}</td><td>${safe(results[1].stats[i]??'—')}</td></tr>`).join('')}</tbody></table></div>`;
- }catch(e){out.innerHTML=`<p class="error">Comparaison indisponible : ${safe(e.message)}. Les journaux des joueurs sont collectés progressivement.</p>`;}
+ try{const results=await Promise.all(ids.map(async id=>{const p=allSkaters.find(x=>x.playerId===id);if(!p)throw Error('Joueur introuvable');const season=Number((await get('/metadata')).season);let log={gameLog:[]};try{log=await get(`/player/${id}/game-log/${season}/2`)}catch(e){}const recent=(log.gameLog||[]).filter(x=>x.gameDate).sort((a,b)=>b.gameDate.localeCompare(a.gameDate)).slice(0,n);const sum=k=>recent.reduce((s,x)=>s+(Number(x[k])||0),0);return {p,recent,stats:[p.gamesPlayed,p.goals,p.assists,p.points,getToi(p),recent.length?sum('goals'):'—',recent.length?sum('assists'):'—',recent.length?sum('points'):'—',recent.length?sum('shots'):'—']};}));const labels=['MJ saison','Buts saison','Passes saison','Points saison','Temps de glace / match',`Buts (${n} derniers)`,`Passes (${n} derniers)`,`Points (${n} derniers)`,`Tirs (${n} derniers)`];out.innerHTML=`<div class="tablewrap"><table><thead><tr><th>Statistique</th><th>${safe(results[0].p.name)} (${safe(results[0].p.teamAbbrev)})</th><th>${safe(results[1].p.name)} (${safe(results[1].p.teamAbbrev)})</th></tr></thead><tbody>${labels.map((x,i)=>`<tr><td>${safe(x)}</td><td>${safe(results[0].stats[i]??'—')}</td><td>${safe(results[1].stats[i]??'—')}</td></tr>`).join('')}</tbody></table></div>`;
+ }catch(e){out.innerHTML=`<p class="error">Comparaison indisponible : ${safe(e.message)}. Les statistiques de saison restent disponibles même si les journaux récents ne sont pas encore collectés.</p>`;}
 }
 $('leagueSearch').oninput=renderAllPlayers;$('leagueTeam').onchange=renderAllPlayers;$('leagueCompareRun').onclick=compareLeaguePlayers;loadAllPlayers();
 </script></body></html>
