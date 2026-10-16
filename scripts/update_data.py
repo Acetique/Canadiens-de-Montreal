@@ -169,3 +169,97 @@ metadata={'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
           'score_dates_failed':len(score_errors)}
 save('/metadata',metadata)
 print('Collecte terminée',metadata,flush=True)
+
+# V9 : effectifs et statistiques des 32 équipes.
+team_codes=sorted({(x.get('teamAbbrev') or {}).get('default','') for x in results.get('standings',{}).get('standings',[])})
+team_codes=[c for c in team_codes if c]
+if not team_codes:
+    team_codes=['ANA','BOS','BUF','CAR','CBJ','CGY','CHI','COL','DAL','DET','EDM','FLA','LAK','MIN','MTL','NJD','NSH','NYI','NYR','OTT','PHI','PIT','SEA','SJS','STL','TBL','TOR','UTA','VAN','VGK','WPG','WSH']
+all_players={}
+def fetch_team(code):
+    return code,download('/club-stats/'+code+'/now')
+with ThreadPoolExecutor(max_workers=5) as pool:
+    jobs={pool.submit(fetch_team,c):c for c in team_codes}
+    for job in as_completed(jobs):
+        code=jobs[job]
+        try:
+            _,team=job.result()
+            for p in team.get('skaters',[]):
+                pid=p.get('playerId')
+                if not pid: continue
+                item=dict(p)
+                item['name']=localized_name(p.get('firstName'))+' '+localized_name(p.get('lastName'))
+                item['teamAbbrev']=code
+                all_players[str(pid)]=item
+        except Exception as exc:
+            print('AVERTISSEMENT équipe',code,exc,flush=True)
+if all_players:
+    save('/league/skaters',{'season':season,'players':list(all_players.values()),'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+    print('Statistiques LNH :',len(all_players),'joueurs.',flush=True)
+
+# Préparer les journaux pour le comparateur de toute la LNH, en lots.
+# Les 120 joueurs prioritaires (par points) sont traités d'abord; les autres
+# sont ajoutés progressivement aux exécutions suivantes, sans dépasser 120/run.
+ordered=sorted(all_players.values(),key=lambda p:p.get('points') or 0,reverse=True)
+missing=[]
+for p in ordered:
+    pid=p['playerId']
+    rel=f'/player/{pid}/game-log/{season}/2'
+    dest=DEST/(rel.lstrip('/')+'.json')
+    if not dest.exists(): missing.append(rel)
+# Rafraîchir aussi les 40 premiers joueurs lorsque le cache date de > 1 jour.
+for p in ordered[:40]:
+    rel=f'/player/{p["playerId"]}/game-log/{season}/2'
+    dest=DEST/(rel.lstrip('/')+'.json')
+    if dest.exists() and time.time()-dest.stat().st_mtime>86400 and rel not in missing:
+        missing.append(rel)
+with ThreadPoolExecutor(max_workers=6) as pool:
+    jobs={pool.submit(fetch_and_save,path):path for path in missing[:120]}
+    for job in as_completed(jobs):
+        try:job.result()
+        except Exception as exc:print('AVERTISSEMENT journal LNH',exc,flush=True)
+print('Journaux joueurs LNH :',min(len(missing),120),'demandés.',flush=True)
+
+# Détails des rencontres du jour, toutes équipes : éviter les 404 après
+# la première collecte et réactualiser les rencontres en cours.
+for offset in (-1,0,1):
+    day=local_day+datetime.timedelta(days=offset)
+    try:
+        score=download('/score/'+day.isoformat())
+        save('/league/score/'+day.isoformat(),score)
+        active=[g for g in score.get('games',[]) if g.get('id') and g.get('gameState') in ('FINAL','OFF','LIVE','CRIT')]
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            jobs={pool.submit(fetch_and_save,f'/gamecenter/{g["id"]}/{kind}'):(g['id'],kind) for g in active for kind in ('landing','boxscore')}
+            for job in as_completed(jobs):
+                try:job.result()
+                except Exception as exc:print('AVERTISSEMENT détail récent',exc,flush=True)
+    except Exception as exc:print('AVERTISSEMENT journée récente',day,exc,flush=True)
+# Horodatage final, seulement après la collecte de toutes les équipes.
+meta_file=DEST/'metadata.json'
+meta=json.loads(meta_file.read_text(encoding='utf-8')) if meta_file.exists() else {}
+meta.update({'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'league_players':len(all_players),'version':'9'})
+save('/metadata',meta)
+# Fiches avancées (dont temps de glace moyen) mises en cache progressivement.
+landing_missing=[]
+for p in ordered:
+    rel=f'/player/{p["playerId"]}/landing'
+    if not (DEST/(rel.lstrip('/')+'.json')).exists(): landing_missing.append(rel)
+with ThreadPoolExecutor(max_workers=6) as pool:
+    jobs={pool.submit(fetch_and_save,path):path for path in landing_missing[:120]}
+    for job in as_completed(jobs):
+        try:job.result()
+        except Exception as exc:print('AVERTISSEMENT fiche LNH',exc,flush=True)
+# Fusionner les valeurs avancées disponibles dans le tableau global.
+for p in all_players.values():
+    f=DEST/'player'/str(p['playerId'])/'landing.json'
+    if not f.exists():continue
+    try:
+        landing=json.loads(f.read_text(encoding='utf-8'))
+        stats=landing.get('featuredStats',{}).get('regularSeason',{}).get('subSeason',{})
+        p['avgTimeOnIce']=stats.get('avgToi') or stats.get('avgTimeOnIce') or p.get('avgTimeOnIce')
+        p['powerPlayGoals']=stats.get('powerPlayGoals',p.get('powerPlayGoals'))
+        p['faceoffWinPctg']=stats.get('faceoffWinningPctg',p.get('faceoffWinPctg'))
+    except (OSError,ValueError):pass
+if all_players:
+    save('/league/skaters',{'season':season,'players':list(all_players.values()),'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+print('Fiches avancées :',min(len(landing_missing),120),'demandées.',flush=True)
