@@ -114,3 +114,58 @@ try:
     print('Meilleurs pointeurs LNH : collecte réussie.',flush=True)
 except Exception as exc:
     print('AVERTISSEMENT meilleurs pointeurs :',exc,flush=True)
+
+
+# Fiches des derniers matchs de tous les joueurs, y compris B/A/PTS.
+last_games={}
+for p in players:
+    pid=p.get('playerId')
+    if not pid: continue
+    f=DEST/'player'/str(pid)/'game-log'/str(season)/'2.json'
+    if not f.exists(): continue
+    try:
+        entries=json.loads(f.read_text(encoding='utf-8')).get('gameLog',[])
+        entries=sorted((x for x in entries if x.get('gameDate')),key=lambda x:x['gameDate'])
+        if entries:
+            g=entries[-1]
+            last_games[str(pid)]=f"{g.get('goals',0)}-{g.get('assists',0)}-{g.get('points',0)}"
+    except (ValueError,OSError) as exc: print('AVERTISSEMENT fiche joueur',pid,exc)
+save('/players-last-games',{'season':season,'players':last_games})
+
+# Détails des matchs : tous les matchs terminés du CH et les rencontres
+# de toute la LNH des 14 derniers jours, en plus des matchs en cours.
+all_score_files=list((DEST/'league'/'score').glob('*.json')) if (DEST/'league'/'score').exists() else []
+match_ids=set()
+for g in results['schedule'].get('games',[]):
+    if g.get('id') and g.get('gameState') in ('FINAL','OFF','LIVE','CRIT'):
+        match_ids.add(int(g['id']))
+for file in all_score_files:
+    try:
+        day=datetime.date.fromisoformat(file.stem)
+        if not (local_day-datetime.timedelta(days=14)<=day<=local_day): continue
+        for g in json.loads(file.read_text(encoding='utf-8')).get('games',[]):
+            if g.get('id') and g.get('gameState') in ('FINAL','OFF','LIVE','CRIT'):
+                match_ids.add(int(g['id']))
+    except (ValueError,OSError): continue
+match_paths=[]
+for gid in sorted(match_ids):
+    for kind in ('landing','boxscore'):
+        rel=f'/gamecenter/{gid}/{kind}'
+        target=DEST/(rel.lstrip('/')+'.json')
+        if not target.exists() or gid in [int(g['id']) for g in results['schedule'].get('games',[]) if g.get('id') and g.get('gameState') in ('LIVE','CRIT')]:
+            match_paths.append(rel)
+match_errors=[]
+with ThreadPoolExecutor(max_workers=6) as pool:
+    futures={pool.submit(fetch_and_save,path):path for path in match_paths}
+    for future in as_completed(futures):
+        try:future.result()
+        except Exception as exc:
+            match_errors.append(str(exc))
+            print('AVERTISSEMENT détail match',exc,flush=True)
+# Horodatage de la collecte terminé, après toutes les sections.
+metadata={'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          'season':season,'players':len(players),'last_game_players':len(last_games),
+          'match_details_requested':len(match_paths),'match_details_failed':len(match_errors),
+          'score_dates_failed':len(score_errors)}
+save('/metadata',metadata)
+print('Collecte terminée',metadata,flush=True)
