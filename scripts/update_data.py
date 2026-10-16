@@ -106,3 +106,11 @@ save('/league/dates',{'start':start.isoformat(),'end':end.isoformat(),
     'updated_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
     'errors':score_errors})
 print(f'Pointages : {len(paths_to_fetch)-len(score_errors)}/{len(paths_to_fetch)} journées téléchargées.')
+
+# Classement des meilleurs pointeurs de toute la LNH.
+try:
+    leaders=download('/skater-stats-leaders/current?categories=points&limit=30')
+    save('/skater-stats-leaders/current',leaders)
+    print('Meilleurs pointeurs LNH : collecte réussie.',flush=True)
+except Exception as exc:
+    print('AVERTISSEMENT meilleurs pointeurs :',exc,flush=True)
