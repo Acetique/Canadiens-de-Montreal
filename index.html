@@ -604,4 +604,21 @@ function teamScheduleButton(code,logo='',label=''){
   };
 })();
 </script>
+<script>
+// V24 — Réinitialisation intégrale : recharge l’application dans son état initial.
+// Le mode capture empêche l’ancien gestionnaire de réinitialisation partielle de s’exécuter.
+(function(){
+  const button=document.getElementById('resetFilters');
+  if(!button)return;
+  button.title='Tout réinitialiser : onglets, filtres, recherches, tris, comparaisons, calendriers et fenêtres';
+  button.addEventListener('click',function(event){
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    // Un paramètre unique évite la restauration de l’état précédent des formulaires.
+    const url=new URL(window.location.href);
+    url.searchParams.set('reset',String(Date.now()));
+    window.location.replace(url.href);
+  },true);
+})();
+</script>
 </body></html>
