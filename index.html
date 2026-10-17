@@ -433,53 +433,79 @@ function comparePhoto(p){const id=Number(p?.playerId);const photo=p?.headshot|| 
 #teamScheduleOverlay{position:fixed;inset:0;z-index:200;background:#010712e8;display:flex;align-items:center;justify-content:center;padding:12px}
 #teamScheduleOverlay[hidden]{display:none!important}
 .team-schedule-dialog{width:min(680px,100%);max-height:90dvh;overflow:auto;overscroll-behavior:contain;background:#0b192b;border:1px solid #355476;border-radius:18px;padding:18px;box-shadow:0 25px 80px #0009}
-.team-schedule-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}.team-schedule-header h2{margin:0;font-size:clamp(18px,4vw,24px)}
+.team-schedule-tabs{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}.team-schedule-tab{border:1px solid #355476;background:#122942;color:#d8e8ff;border-radius:10px;padding:10px 14px;cursor:pointer;font:inherit;font-weight:700}.team-schedule-tab[aria-selected="true"]{background:#24618b;color:#fff;border-color:#75baf1}.team-schedule-score{font-size:19px;font-weight:800;white-space:nowrap}.team-schedule-detail{font-size:12px;color:#a9bed8;margin-top:5px}.team-schedule-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}.team-schedule-header h2{margin:0;font-size:clamp(18px,4vw,24px)}
 .team-schedule-close{margin-left:auto;flex-shrink:0}.team-schedule-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:13px 2px;border-bottom:1px solid #263e5b}
 .team-schedule-item:last-child{border-bottom:0}.team-schedule-opponent{display:flex;align-items:center;gap:9px;font-weight:750;min-width:0}.team-schedule-opponent .team-logo{width:32px;height:32px;flex-shrink:0}.team-schedule-meta{color:#a9bed8;font-size:13px;margin-top:4px}.team-schedule-home{color:#8dd9b8;font-size:12px}.team-schedule-away{color:#e9c48d;font-size:12px}
 @media(max-width:600px){.team-schedule-dialog{padding:13px}.team-schedule-item{grid-template-columns:1fr}.team-schedule-item .when{margin-top:0}}
 </style>
-<div id="teamScheduleOverlay" hidden role="presentation"><div class="team-schedule-dialog" role="dialog" aria-modal="true" aria-labelledby="teamScheduleTitle"><div class="team-schedule-header"><span id="teamScheduleLogo"></span><h2 id="teamScheduleTitle">Prochains matchs</h2><button class="btn back team-schedule-close" id="teamScheduleClose" type="button" aria-label="Fermer">✕</button></div><div id="teamScheduleContent" aria-live="polite"></div></div></div>
+<div id="teamScheduleOverlay" hidden role="presentation"><div class="team-schedule-dialog" role="dialog" aria-modal="true" aria-labelledby="teamScheduleTitle"><div class="team-schedule-header"><span id="teamScheduleLogo"></span><h2 id="teamScheduleTitle">Prochains matchs</h2><button class="btn back team-schedule-close" id="teamScheduleClose" type="button" aria-label="Fermer">✕</button></div><div class="team-schedule-tabs" role="tablist" aria-label="Calendrier de l’équipe"><button id="teamScheduleUpcoming" type="button" class="team-schedule-tab" role="tab" aria-selected="true" data-team-view="upcoming">Prochains matchs</button><button id="teamSchedulePast" type="button" class="team-schedule-tab" role="tab" aria-selected="false" data-team-view="past">Matchs passés</button></div><div id="teamScheduleContent" aria-live="polite"></div></div></div>
 <script>
-/* CH LIVE V16 : calendrier d'équipe côté navigateur, sans nouveau collecteur. */
+/* CH LIVE V18 : 10 prochains et 10 derniers matchs, directement via API LNH. */
 function teamScheduleButton(code,logo='',label=''){
   code=String(code||'').toUpperCase();
   if(!/^[A-Z]{2,3}$/.test(code))return (logo||'')+safe(label||code||'—');
-  return `<button type="button" class="team-schedule-action" data-schedule-team="${safe(code)}" aria-label="Voir les 10 prochains matchs de ${safe(TEAM_FULL_NAMES[code]||label||code)}">${logo||''}<span>${safe(label||code)}</span></button>`;
+  return `<button type="button" class="team-schedule-action" data-schedule-team="${safe(code)}" aria-label="Calendrier et résultats de ${safe(TEAM_FULL_NAMES[code]||label||code)}">${logo||''}<span>${safe(label||code)}</span></button>`;
 }
 (function(){
   const overlay=document.getElementById('teamScheduleOverlay');
   const content=document.getElementById('teamScheduleContent');
   const close=document.getElementById('teamScheduleClose');
-  let previousFocus=null,requestNumber=0;
+  const tabs=Array.from(overlay.querySelectorAll('[data-team-view]'));
+  let previousFocus=null,requestNumber=0,currentCode='',currentGames=[],selectedView='upcoming';
   function dismiss(){requestNumber++;overlay.hidden=true;document.body.style.overflow='';if(previousFocus?.isConnected)previousFocus.focus();}
   close.addEventListener('click',dismiss);
   overlay.addEventListener('click',e=>{if(e.target===overlay)dismiss();});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!overlay.hidden)dismiss();});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-schedule-team]');if(!b)return;e.preventDefault();showTeamSchedule(b.dataset.scheduleTeam,b);});
+  function setView(view){selectedView=view;tabs.forEach(t=>t.setAttribute('aria-selected',String(t.dataset.teamView===view)));render();}
+  tabs.forEach(t=>t.addEventListener('click',()=>setView(t.dataset.teamView)));
+  function render(){
+    const valid=currentGames.filter(g=>[2,3].includes(Number(g.gameType))&&g.startTimeUTC);
+    const list=selectedView==='past'
+      ?valid.filter(g=>ended(g)).sort((a,b)=>new Date(b.startTimeUTC)-new Date(a.startTimeUTC)).slice(0,10)
+      :valid.filter(g=>!ended(g)).sort((a,b)=>new Date(a.startTimeUTC)-new Date(b.startTimeUTC)).slice(0,10);
+    if(!list.length){content.innerHTML=`<p class="muted">Aucun ${selectedView==='past'?'match terminé':'prochain match'} disponible pour cette équipe dans le calendrier de la saison.</p>`;return;}
+    content.innerHTML=`<p class="muted">${list.length} ${selectedView==='past'?'derniers matchs terminés':'prochains matchs'} · Heure du Québec</p>`+list.map(g=>{
+      const home=abbr(g.homeTeam)===currentCode;
+      const opponent=home?g.awayTeam:g.homeTeam;
+      const oppCode=abbr(opponent);
+      const opponentName=TEAM_FULL_NAMES[oppCode]||oppCode;
+      const side=home?'À domicile':'À l’extérieur';
+      let right='';
+      let extra='';
+      if(ended(g)){
+        const ours=Number(home?g.homeTeam?.score:g.awayTeam?.score);
+        const theirs=Number(home?g.awayTeam?.score:g.homeTeam?.score);
+        const validScores=Number.isFinite(ours)&&Number.isFinite(theirs);
+        const outcome=validScores?(ours>theirs?'Victoire':ours<theirs?'Défaite':'Égalité'):'Terminé';
+        const period=g.gameOutcome?.lastPeriodType;
+        extra=`${outcome}${period==='OT'?' · Prolongation':period==='SO'?' · Tirs de barrage':''}`;
+        right=`<div class="team-schedule-score">${validScores?`${ours} – ${theirs}`:'—'}</div><div class="team-schedule-detail">${safe(fmt(g.startTimeUTC))}</div>`;
+      }else{
+        extra=live(g)?`🔴 En direct · ${periodLabel(g)} · ${safe(g.clock?.timeRemaining||'')}`:'À venir';
+        right=`<div class="when">${safe(fmt(g.startTimeUTC))}</div>`;
+      }
+      return `<div class="team-schedule-item"><div><div class="team-schedule-opponent">${teamLogo(opponent)}<span>${safe(opponentName)}</span></div><div class="team-schedule-meta"><span class="${home?'team-schedule-home':'team-schedule-away'}">${side}</span> · ${safe(extra)}</div></div><div style="text-align:right">${right}</div></div>`;
+    }).join('');
+  }
   window.showTeamSchedule=async function(code,source){
     code=String(code||'').toUpperCase();if(!/^[A-Z]{2,3}$/.test(code))return;
     previousFocus=source||document.activeElement;
     const current=++requestNumber;
+    currentCode=code;currentGames=[];selectedView='upcoming';
+    tabs.forEach(t=>t.setAttribute('aria-selected',String(t.dataset.teamView==='upcoming')));
     document.getElementById('teamScheduleTitle').textContent=TEAM_FULL_NAMES[code]||code;
     document.getElementById('teamScheduleLogo').innerHTML=teamLogoCode(code);
-    content.innerHTML='<p class="muted">Chargement des 10 prochains matchs…</p>';
+    content.innerHTML='<p class="muted">Chargement du calendrier et des résultats…</p>';
     overlay.hidden=false;document.body.style.overflow='hidden';close.focus();
     try{
       const url=`https://api-web.nhle.com/v1/club-schedule-season/${encodeURIComponent(code)}/now`;
       const response=await fetch(url,{headers:{Accept:'application/json'}});
       if(!response.ok)throw new Error(`API LNH : HTTP ${response.status}`);
       const data=await response.json();if(current!==requestNumber)return;
-      const upcoming=(data.games||[]).filter(g=>[2,3].includes(Number(g.gameType))&&!ended(g)&&g.startTimeUTC&&new Date(g.startTimeUTC).getTime()>Date.now()-4*3600000).sort((a,b)=>new Date(a.startTimeUTC)-new Date(b.startTimeUTC)).slice(0,10);
-      if(!upcoming.length){content.innerHTML='<p class="muted">Aucun prochain match disponible pour cette équipe.</p>';return;}
-      content.innerHTML='<p class="muted">10 prochains matchs disponibles · Heure du Québec</p>'+upcoming.map(g=>{
-        const home=abbr(g.homeTeam)===code;
-        const opponent=home?g.awayTeam:g.homeTeam;
-        const oppCode=abbr(opponent);
-        const opponentName=TEAM_FULL_NAMES[oppCode]||oppCode;
-        const status=live(g)?`🔴 En direct · ${periodLabel(g)} · ${safe(g.clock?.timeRemaining||'')}`:'À venir';
-        return `<div class="team-schedule-item"><div><div class="team-schedule-opponent">${teamLogo(opponent)}<span>${safe(opponentName)}</span></div><div class="team-schedule-meta"><span class="${home?'team-schedule-home':'team-schedule-away'}">${home?'À domicile':'À l’extérieur'}</span> · ${safe(status)}</div></div><div class="when">${safe(fmt(g.startTimeUTC))}</div></div>`;
-      }).join('');
-    }catch(error){if(current!==requestNumber)return;content.innerHTML='<p class="error">Impossible de récupérer les prochains matchs directement depuis la LNH. Le navigateur peut bloquer cet accès (CORS) ou le service peut être temporairement indisponible.</p><p class="muted">'+safe(error.message)+'</p>';}
+      currentGames=Array.isArray(data.games)?data.games:[];
+      render();
+    }catch(error){if(current!==requestNumber)return;content.innerHTML='<p class="error">Impossible de récupérer le calendrier directement depuis la LNH. Vérifie l’accès réseau ou les restrictions CORS du navigateur.</p><p class="muted">'+safe(error.message)+'</p>';}
   };
 })();
 </script>
